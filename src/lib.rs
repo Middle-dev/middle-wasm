@@ -11,17 +11,6 @@ pub extern "C" fn wasm_alloc(size: u32) -> *mut u8 {
     ptr
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-enum In {
-    Request(String),
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-enum Out {
-    Ok(u32),
-    Error(String)
-}
-
 /// The host always calls main with this type of object.
 /// 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -81,7 +70,7 @@ pub extern "C" fn main(ptr: *mut u8, len: usize) -> (*const u8, usize) {
     // Here we should call user code... Let's just stub this out for now.
     let user_code = |input: WasmMainCall| -> WasmMainResult {
         // Make a dummy api call
-        let response = request(RequestIn { url: "http://asdfasdfasdf.com".to_string() });
+        let response = request(RequestIn { url: "http://google.com".to_string() });
 
         if response.http_code != 200 {
             WasmMainResult::Error(format!("got error: {response:?}").to_string())
