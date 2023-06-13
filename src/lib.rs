@@ -43,7 +43,7 @@ enum WasmMainResult {
 /// Right now, 
 /// 
 fn to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Serialize {
-    let out = bincode::serialize(obj).unwrap();
+    let out = postcard::to_stdvec(obj).unwrap();
 
     let ptr = out.as_ptr();
     let len = out.len();
@@ -67,7 +67,7 @@ fn from_host<T>(ptr: *mut u8, len: usize) -> T where T: Sized + serde::de::Deser
     let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
 
     // Now decode it.
-    let out: T = bincode::deserialize_from(&bytes[..]).unwrap();
+    let out: T = postcard::from_bytes(&bytes[..]).unwrap();
     out
 }
 
