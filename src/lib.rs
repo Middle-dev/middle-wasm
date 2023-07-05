@@ -1,3 +1,5 @@
+pub use macros::middle_fn;
+
 use serde::{Serialize, Deserialize};
 
 /// `walloc` has the guest allocate some memory in a vector from within the guest.
@@ -11,17 +13,15 @@ pub extern "C" fn wasm_alloc(size: u32) -> *mut u8 {
     ptr
 }
 
-/// The host always calls main with this type of object.
-/// 
+/// The host always calls `main` with this type of object.
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-struct WasmMainCall {
-
+pub struct WasmMainCall {
+    // Empty for now, while we figure out what sorts of things we should call this with.
 }
 
-/// The host requires us to return this type of object. 
-/// 
+/// The host requires us to return this type of object from `main`
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-enum WasmMainResult {
+pub enum WasmMainResult {
     Error(String),
     Ok
 }
@@ -29,9 +29,8 @@ enum WasmMainResult {
 /// Transforms an object into some bytes that then can be read by the host.
 /// Beware of memory leaks!
 /// This function creates a new vector and then never calls the destructor on it.
-/// Right now, 
-/// 
-fn to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Serialize {
+/// It returns just enough information for the host to look up the value in linear memory.
+pub fn to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Serialize {
     let out = postcard::to_stdvec(obj).unwrap();
 
     let ptr = out.as_ptr();
@@ -44,42 +43,18 @@ fn to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Serialize {
 /// "Unforgets" a bit of memory we created for the host.
 /// It's important to call this after to_host() is called.
 /// It re-constructs a Rust vector, that should have been created earlier by `to_host` and lets it fall out of scope, dropping the value.
-/// 
-fn unforget(ptr: *const u8, len: usize) -> () {
+pub fn unforget(ptr: *const u8, len: usize) -> () {
     let _out = unsafe { Vec::from_raw_parts(ptr as *mut u8, len, len) };
 }
 
 /// Converts raw bytes (passed as a pointer) from the host back into an value for us to use.
-/// 
-fn from_host<T>(ptr: *mut u8, len: usize) -> T where T: Sized + serde::de::DeserializeOwned {
+pub fn from_host<T>(ptr: *mut u8, len: usize) -> T where T: Sized + serde::de::DeserializeOwned {
     // First convert the offset and len back back into a vector.
     let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
 
     // Now decode it.
     let out: T = postcard::from_bytes(&bytes[..]).unwrap();
     out
-}
-
-/// Called by the host as the main extrypoint into this WASM module.
-/// 
-#[no_mangle]
-pub extern "C" fn main(ptr: *mut u8, len: usize) -> (*const u8, usize) {
-    // Reconstruct whatever the host gave us.
-    let called_with: WasmMainCall = from_host(ptr, len);
-
-    // Here we should call user code... Let's just stub this out for now.
-    let user_code = |input: WasmMainCall| -> WasmMainResult {
-        // Make a dummy api call
-        let response = request(RequestIn { url: "http://google.com".to_string() });
-
-        if response.http_code != 200 {
-            WasmMainResult::Error(format!("got error: {response:?}").to_string())
-        } else {
-            WasmMainResult::Ok
-        }
-    };
-    let result = user_code(called_with);
-    to_host(&result)
 }
 
 /// Makes a request to an API with the given headers and payload.
@@ -103,5 +78,5 @@ pub struct RequestOut {
 }
 
 extern "C" {
-    fn host_request(ptr: *const u8, len: usize) -> (*mut u8, usize);
+    pub fn host_request(ptr: *const u8, len: usize) -> (*mut u8, usize);
 }

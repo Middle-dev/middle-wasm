@@ -1,5 +1,5 @@
 [package]
-name = "middle-wasm"
+name = "middle_wasm"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,6 +8,9 @@ edition = "2021"
 [dependencies]
 postcard = { version = "1.0.0", features = ["use-std"] }
 serde = { version = "1.0.164", features = ["derive"] }
+macros = { path = "macros" }
 
-[lib]
-crate-type = ["cdylib"]
+# See https://github.com/rust-lang/cargo/issues/8311
+# And https://github.com/rust-lang/cargo/issues/9016
+# [lib]
+# crate-type = ["cdylib"]
