@@ -1,7 +1,7 @@
 extern crate proc_macro;
 extern crate proc_macro2;
-use quote::{ quote };
-use syn::{ ItemFn };
+use quote::quote;
+use syn::ItemFn;
 
 fn middle_fn_inner(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let input = syn::parse2::<ItemFn>(input).unwrap();
@@ -19,7 +19,7 @@ fn middle_fn_inner(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
 
     let output = quote! {
         #[no_mangle]
-        pub extern "C" fn #fn_name_one(ptr: *mut u8, len: usize) -> (*const u8, usize) {
+        pub fn #fn_name_one(ptr: *mut u8, len: usize) -> (*const u8, usize) {
             // Rebuild whatever the host called us with.
             let called_with: WasmMainCall = from_host(ptr, len);
         
@@ -58,12 +58,12 @@ fn test() {
 
     let compare = quote!(
         # [no_mangle] 
-        pub extern "C" fn hello (ptr : * mut u8 , len : usize) -> (* const u8 , usize) { 
+        pub fn hello (ptr : * mut u8 , len : usize) -> (* const u8 , usize) { 
             let called_with : WasmMainCall = from_host (ptr , len) ; 
             fn hello (input : WasmMainCall) -> WasmMainResult { WasmMainResult { } } 
             let result : WasmMainResult = hello (called_with) ; 
             to_host (& result) 
-        }        
+        }
     );
 
     assert_eq!(generated.to_string(), compare.to_string());

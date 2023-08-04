@@ -13,6 +13,13 @@ pub extern "C" fn wasm_alloc(size: u32) -> *mut u8 {
     ptr
 }
 
+/// Just a dummy test of flipping two values, just so it's easy to look at the compiled WASM and verify that multi-value return has been turned on.
+///  
+#[no_mangle]
+pub fn flip(a: u32, b: u32) -> (u32, u32) {
+    return (b, a)
+}
+
 /// The host always calls `main` with this type of object.
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct WasmMainCall {
@@ -77,6 +84,7 @@ pub struct RequestOut {
     body: String
 }
 
+#[link(wasm_import_module = "middle")]
 extern "C" {
     pub fn host_request(ptr: *const u8, len: usize) -> (*mut u8, usize);
 }
