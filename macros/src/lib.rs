@@ -21,16 +21,16 @@ fn middle_fn_inner(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
         #[no_mangle]
         pub fn #fn_name_one(ptr: *mut u8, len: usize) -> (*const u8, usize) {
             // Rebuild whatever the host called us with.
-            let called_with: WasmMainCall = from_host(ptr, len);
+            let called_with = json_from_host(ptr, len);
         
             // Put in the user's function here.
             #input
         
             // Call the user's function
-            let result: WasmMainResult = #fn_name_two(called_with);
+            let result = #fn_name_two(called_with);
 
             // Make the result available to the host.
-            to_host(&result)
+            json_to_host(&result)
         }
     };
 
@@ -59,10 +59,10 @@ fn test() {
     let compare = quote!(
         # [no_mangle] 
         pub fn hello (ptr : * mut u8 , len : usize) -> (* const u8 , usize) { 
-            let called_with : WasmMainCall = from_host (ptr , len) ; 
+            let called_with = json_from_host (ptr , len) ; 
             fn hello (input : WasmMainCall) -> WasmMainResult { WasmMainResult { } } 
-            let result : WasmMainResult = hello (called_with) ; 
-            to_host (& result) 
+            let result = hello (called_with) ; 
+            json_to_host (& result) 
         }
     );
 

@@ -1,6 +1,7 @@
 pub use macros::middle_fn;
-
 use serde::{Serialize, Deserialize};
+
+// FIXME: Prefix all functions that are core middle functionality so users don't accidentally over-write them.
 
 /// `walloc` has the guest allocate some memory in a vector from within the guest.
 /// This memory is created within the linear memory of the WASM runtime.
@@ -20,25 +21,24 @@ pub fn flip(a: u32, b: u32) -> (u32, u32) {
     return (b, a)
 }
 
-/// The host always calls `main` with this type of object.
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub struct WasmMainCall {
-    // Empty for now, while we figure out what sorts of things we should call this with.
-}
-
-/// The host requires us to return this type of object from `main`
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-pub enum WasmMainResult {
-    Error(String),
-    Ok
-}
-
-/// Transforms an object into some bytes that then can be read by the host.
+/// Transforms an object into some bytes that can then be read by the host.
 /// Beware of memory leaks!
 /// This function creates a new vector and then never calls the destructor on it.
 /// It returns just enough information for the host to look up the value in linear memory.
 pub fn to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Serialize {
     let out = postcard::to_stdvec(obj).unwrap();
+
+    let ptr = out.as_ptr();
+    let len = out.len();
+    std::mem::forget(out);
+
+    (ptr, len)
+}
+
+/// Transforms an object into some bytes that can then be read by the host.
+/// This creates some linear memory, which needs to be freed by the host, which we'll force by calling unforget() on the value and then letting it drop out of scope.
+pub fn json_to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Serialize {
+    let out = serde_json::to_vec(obj).unwrap();
 
     let ptr = out.as_ptr();
     let len = out.len();
@@ -61,6 +61,17 @@ pub fn from_host<T>(ptr: *mut u8, len: usize) -> T where T: Sized + serde::de::D
 
     // Now decode it.
     let out: T = postcard::from_bytes(&bytes[..]).unwrap();
+    out
+}
+
+/// Converts raw bytes (passed as a pointer) which represents JSON, from the host back into a value for us to use.
+pub fn json_from_host<T>(ptr: *mut u8, len: usize) -> T where T: Sized + serde::de::DeserializeOwned {
+    // First convert the offset and len back back into a vector.
+    let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
+
+    // Now decode it.
+    let out = serde_json::from_slice::<T>(&bytes).unwrap();
+
     out
 }
 

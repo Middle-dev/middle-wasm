@@ -8,8 +8,17 @@ edition = "2021"
 [dependencies]
 postcard = { version = "1.0.0", features = ["use-std"] }
 serde = { version = "1.0.164", features = ["derive"] }
+serde_json = "1.0"
 macros = { path = "macros" }
 
+
+[profile.release]
+opt-level = 's'
+lto = true
+
+
+# For my own sanity, I'm leaving this comment in here.
+# If I want to just test a build of middle-wasm on its own, I can uncomment the bloe.
 # See https://github.com/rust-lang/cargo/issues/8311
 # And https://github.com/rust-lang/cargo/issues/9016
 # [lib]
