@@ -48,24 +48,20 @@ fn middle_fn_inner(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
         // This allows the user to call their own function over again if they like.
         #input
 
-        // WASM-exported version of their original function.
         #[no_mangle]
-        pub fn #user_fn_name(ptr: *mut u8, len: usize) -> *const u8 {
+        pub fn #user_fn_name(ptr: *mut u8) -> *const u8 {
             // The host calls us with a JSON value.
             // There seems to be no other good way of constructing a value on the host side.
-            let input_json: serde_json::Value = from_host(ptr, len);
-
+            let input_json: serde_json::Value = from_host(ptr);
             // Convert the JSON value back into a Rust struct.
-            let input: #in_sig = serde_json::from_value(input_json).unwrap("fn sig mismatch");
-        
+            let input: #in_sig = serde_json::from_value(input_json).expect("user function input could not be serialzied into JSON");
             // Call the user's function.
             let output = #fn_name(input);
-
             // Convert the return value into JSON, so the host can parse it.
-            let output_json: serde_json::Value = output.serialize().unwrap("unable to convert output to json");
-
+            let output_json = serde_json::value::to_value(output).expect("user function output could not be serialized into JSON");
             // Make the result available to the host.
-            to_host(&output_json)
+            let ptr = to_host(&output_json);
+            ptr
         }
 
         #[no_mangle]
@@ -77,7 +73,8 @@ fn middle_fn_inner(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
                     in_schema, out_schema
                 }
             };
-            to_host(&fn_info)
+            let ptr = to_host(&fn_info);
+            ptr
         }
     };
 
@@ -91,46 +88,60 @@ pub fn middle_fn(_attr: proc_macro::TokenStream, input: proc_macro::TokenStream)
     proc_macro::TokenStream::from(output)
 }
 
-#[test]
-fn test() {
-    let generated = middle_fn_inner(
-        quote!(
-            fn hello(input: WasmMainCall) -> WasmMainResult {
-                WasmMainResult { }
-            }
-        )
-    );
+mod test {
+    use crate::*;
 
-    println!("{}", generated);
-
-    let compare = quote!(
-        fn hello (input : WasmMainCall) -> WasmMainResult { WasmMainResult { } } 
-
-        # [no_mangle] 
-        pub fn user_fn__hello (ptr : * mut u8 , len : usize) -> * const u8 { 
-            let input_json: serde_json::Value = from_host(ptr, len);
-
-            let input: WasmMainCall = serde_json::from_value(input_json).unwrap("fn sig mismatch");
-
-            let output = hello (input) ; 
-
-            let output_json: serde_json::Value = output.serialize().unwrap("unable to convert output to json");
-
-            to_host (& output_json) 
-        }
-
-        #[no_mangle]
-        pub fn user_fn_info__hello() -> *const u8 {
-            let fn_info = {
-                let in_schema = schemars::schema_for!(WasmMainCall);
-                let out_schema = schemars::schema_for!(WasmMainResult);
-                FnInfo {
-                    in_schema, out_schema
+    #[test]
+    fn test() {
+        let generated = middle_fn_inner(
+            quote!(
+                fn test(input: TestIn) -> TestOut {
+                    println!("This is my function!");
+                    TestOut {
+                        my_str: format!("I was given {}", input.my_str),
+                        my_num: input.my_num + 1,
+                    }
                 }
-            };
-            to_host(&fn_info)
-        }
-    );
+            )
+        );
 
-    assert_eq!(generated.to_string(), compare.to_string());
+        println!("{}", generated);
+
+        let compare = quote!(
+            fn test(input: TestIn) -> TestOut {
+                println!("This is my function!");
+                TestOut {
+                    my_str: format!("I was given {}", input.my_str),
+                    my_num: input.my_num + 1,
+                }
+            }
+            
+            #[no_mangle]
+            pub fn user_fn__test(ptr: *mut u8) -> *const u8 {
+                let input_json: serde_json::Value = from_host(ptr);
+                let input: TestIn = serde_json::from_value(input_json).expect("user function input could not be serialzied into JSON");
+                let output = test(input);
+                let output_json = serde_json::value::to_value(output).expect("user function output could not be serialized into JSON");
+                let ptr = to_host(&output_json);
+                ptr
+            }
+            
+            #[no_mangle]
+            pub fn user_fn_info__test() -> *const u8 {
+                let fn_info = {
+                    let in_schema = schemars::schema_for!(TestIn);
+                    let out_schema = schemars::schema_for!(TestOut);
+                    FnInfo {
+                        in_schema,
+                        out_schema
+                    }
+                };
+                let ptr = to_host(&fn_info);
+                ptr
+            }
+            
+        );
+
+        assert_eq!(generated.to_string(), compare.to_string());
+    }
 }

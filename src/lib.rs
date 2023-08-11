@@ -21,13 +21,13 @@ pub fn wasm_alloc(size: u32) -> *mut u8 {
 
 /// Transforms an object into some bytes that can then be read by the host.
 /// It returns an offset in linear memory, for the host to look up.
-/// The `unforget` function must be called after everyone is done with this memory, or else memory usage will grow forever.
+/// The host will call "unforget" on the memory after it's read it and serialized it.
+/// It's not for us to do!
 /// 
-pub fn to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Serialize {
+pub fn to_host<T>(obj: &T) -> *const u8 where T: Sized + serde::Serialize {
     // We need to serialize the object, and postcard seems like a fine way to do this.
     // We'll use Message Pack, which *cross fingers* will allow us to serialize and deserialize objects not known at compile time.
     let bytes: Vec<u8> = rmp_serde::encode::to_vec(obj).expect("to_host: Unable to allocate vector");
-    let len = bytes.len();
     let ptr = bytes.as_ptr();
 
     // This is an important line of code.
@@ -35,12 +35,13 @@ pub fn to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Seriali
     // This does mean it's up to the host to call 
     std::mem::forget(ptr);
 
-    (ptr, len)
+    ptr
 }
 
 /// "Unforgets" a bit of memory we created for the host.
-/// It's important to call this after to_host() is called.
 /// It re-constructs a Rust vector, that should have been created earlier by `to_host` and lets it fall out of scope, dropping the value.
+/// We, the guest, should never call this!
+/// The host is entirely responsible for it.
 #[no_mangle]
 pub fn unforget(ptr: *const u8, len: usize) {
     // We're happy this isn't used, we want to drop it.
@@ -97,11 +98,9 @@ pub fn from_host<T>(ptr: *mut u8) -> T where T: Sized + serde::de::DeserializeOw
 /// Makes a request to an API with the given headers and payload.
 /// Returns the status code and body.
 pub fn request(input: RequestIn) -> RequestOut {
-    let (ptr, len) = to_host(&input);
+    let ptr = to_host(&input);
     let out_ptr = unsafe { host_request(ptr) };
-    let out = from_host(out_ptr);
-    unforget(ptr, len);
-    out
+    from_host(out_ptr)
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
