@@ -1,48 +1,39 @@
-pub use macros::middle_fn;
+use std::io::Read;
+
+use schemars::schema::RootSchema;
 use serde::{Serialize, Deserialize};
 
-// FIXME: Prefix all functions that are core middle functionality so users don't accidentally over-write them.
+pub mod prelude {
+    pub use serde_json;
+    pub use macros::middle_fn;
+    pub use crate::{from_host, to_host, FnInfo};
+}
 
-/// `walloc` has the guest allocate some memory in a vector from within the guest.
-/// This memory is created within the linear memory of the WASM runtime.
-/// The host will use the offset to look up the memory that was just set aside, and then fill it with whatever it needs to fill.
+/// wasm_alloc is a guest funtion that allocates some new linear memory in the Web Assembly runtime.
+/// The host will use the returned pointer to look up the memory that was just set aside, and then fill it with whatever it needs to fill.
 #[no_mangle]
-pub extern "C" fn wasm_alloc(size: u32) -> *mut u8 {
+pub fn wasm_alloc(size: u32) -> *mut u8 {
     let mut buf: Vec<u8> = Vec::with_capacity(size.try_into().unwrap());
     let ptr = buf.as_mut_ptr();
     std::mem::forget(buf);
     ptr
 }
 
-/// Just a dummy test of flipping two values, just so it's easy to look at the compiled WASM and verify that multi-value return has been turned on.
-///  
-#[no_mangle]
-pub fn flip(a: u32, b: u32) -> (u32, u32) {
-    return (b, a)
-}
-
 /// Transforms an object into some bytes that can then be read by the host.
-/// Beware of memory leaks!
-/// This function creates a new vector and then never calls the destructor on it.
-/// It returns just enough information for the host to look up the value in linear memory.
+/// It returns an offset in linear memory, for the host to look up.
+/// The `unforget` function must be called after everyone is done with this memory, or else memory usage will grow forever.
+/// 
 pub fn to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Serialize {
-    let out = postcard::to_stdvec(obj).unwrap();
+    // We need to serialize the object, and postcard seems like a fine way to do this.
+    // We'll use Message Pack, which *cross fingers* will allow us to serialize and deserialize objects not known at compile time.
+    let bytes: Vec<u8> = rmp_serde::encode::to_vec(obj).expect("to_host: Unable to allocate vector");
+    let len = bytes.len();
+    let ptr = bytes.as_ptr();
 
-    let ptr = out.as_ptr();
-    let len = out.len();
-    std::mem::forget(out);
-
-    (ptr, len)
-}
-
-/// Transforms an object into some bytes that can then be read by the host.
-/// This creates some linear memory, which needs to be freed by the host, which we'll force by calling unforget() on the value and then letting it drop out of scope.
-pub fn json_to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Serialize {
-    let out = serde_json::to_vec(obj).unwrap();
-
-    let ptr = out.as_ptr();
-    let len = out.len();
-    std::mem::forget(out);
+    // This is an important line of code.
+    // This will cause Rust to not garbage collect `bytes` at the end of this block.
+    // This does mean it's up to the host to call 
+    std::mem::forget(ptr);
 
     (ptr, len)
 }
@@ -50,27 +41,56 @@ pub fn json_to_host<T>(obj: &T) -> (*const u8, usize) where T: Sized + serde::Se
 /// "Unforgets" a bit of memory we created for the host.
 /// It's important to call this after to_host() is called.
 /// It re-constructs a Rust vector, that should have been created earlier by `to_host` and lets it fall out of scope, dropping the value.
-pub fn unforget(ptr: *const u8, len: usize) -> () {
-    let _out = unsafe { Vec::from_raw_parts(ptr as *mut u8, len, len) };
+#[no_mangle]
+pub fn unforget(ptr: *const u8, len: usize) {
+    // We're happy this isn't used, we want to drop it.
+    let _bytes = unsafe { Vec::from_raw_parts(ptr as *mut u8, len, len) };
 }
 
-/// Converts raw bytes (passed as a pointer) from the host back into an value for us to use.
-pub fn from_host<T>(ptr: *mut u8, len: usize) -> T where T: Sized + serde::de::DeserializeOwned {
-    // First convert the offset and len back back into a vector.
-    let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
-
-    // Now decode it.
-    let out: T = postcard::from_bytes(&bytes[..]).unwrap();
-    out
+struct MemoryReclaimer {
+    pointer: *mut u8,
+    offset: isize,
 }
 
-/// Converts raw bytes (passed as a pointer) which represents JSON, from the host back into a value for us to use.
-pub fn json_from_host<T>(ptr: *mut u8, len: usize) -> T where T: Sized + serde::de::DeserializeOwned {
-    // First convert the offset and len back back into a vector.
-    let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
+impl MemoryReclaimer {
+    fn new(pointer: *mut u8) -> Self {
+        Self { pointer, offset: 0 }
+    }
+}
 
-    // Now decode it.
-    let out = serde_json::from_slice::<T>(&bytes).unwrap();
+impl Drop for MemoryReclaimer {
+    // Force Rust to free the memory that we've reclaimed, by making a Vec<u8> out of it and allowing it to drop.
+    fn drop(&mut self) {
+        let offset: usize = self.offset.try_into().unwrap();
+        // We're happy this isn't used, we want to drop it.
+        let _bytes = unsafe { Vec::from_raw_parts(self.pointer, offset, offset) };
+    }
+}
+
+impl Read for MemoryReclaimer {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        for i in 0..buf.len() {
+            // Looking at MessagePack's source code, it looks like it only reads from buffer when it knows there's a value to read from.
+            // We shouldn't end up reading linear memory that we're not supposed to read from.
+            buf[i] = unsafe { 
+                // Copy the value read from memory back into the buffer
+                self.pointer.offset(self.offset).read()
+            };
+            self.offset += 1;
+        }
+        Ok(buf.len())
+    }
+}
+
+/// Converts raw bytes from the host back into an value for us to use.
+/// `ptr` is, in reality, a simple offset in WASM linear memory, which in this guest code, just looks like the heap.
+/// The host has serialized a value of type T into linear memory, and given us that offset with which we should serialize the value once again.
+/// 
+pub fn from_host<T>(ptr: *mut u8) -> T where T: Sized + serde::de::DeserializeOwned {
+    // Use message pack as the serialization library
+    let reader = MemoryReclaimer::new(ptr);
+
+    let out: T = rmp_serde::decode::from_read(reader).expect("from_host<T>: error reading from memory");
 
     out
 }
@@ -78,10 +98,11 @@ pub fn json_from_host<T>(ptr: *mut u8, len: usize) -> T where T: Sized + serde::
 /// Makes a request to an API with the given headers and payload.
 /// Returns the status code and body.
 pub fn request(input: RequestIn) -> RequestOut {
-    let (offset, len) = to_host(&input);
-    let (out_ptr, out_len) = unsafe { host_request(offset, len) };
-    unforget(offset, len);
-    from_host(out_ptr, out_len)
+    let (ptr, len) = to_host(&input);
+    let out_ptr = unsafe { host_request(ptr) };
+    let out = from_host(out_ptr);
+    unforget(ptr, len);
+    out
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -97,5 +118,11 @@ pub struct RequestOut {
 
 #[link(wasm_import_module = "middle")]
 extern "C" {
-    pub fn host_request(ptr: *const u8, len: usize) -> (*mut u8, usize);
+    pub fn host_request(ptr: *const u8) -> *mut u8;
+}
+
+#[derive(Serialize)]
+pub struct FnInfo {
+    pub in_schema: RootSchema,
+    pub out_schema: RootSchema,
 }

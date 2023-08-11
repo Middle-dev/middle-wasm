@@ -6,10 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-postcard = { version = "1.0.0", features = ["use-std"] }
+rmp-serde = "1.1.2"
 serde = { version = "1.0.164", features = ["derive"] }
 serde_json = "1.0"
 macros = { path = "macros" }
+schemars = "0.8.12"
 
 
 [profile.release]
