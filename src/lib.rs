@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Cursor};
 
 use schemars::schema::RootSchema;
 use serde::{Serialize, Deserialize};
@@ -47,18 +47,20 @@ pub fn unforget(ptr: *const u8, len: usize) {
     let _bytes = unsafe { Vec::from_raw_parts(ptr as *mut u8, len, len) };
 }
 
-struct MemoryReclaimer {
+/// Reads directly from linear memory.
+/// When this value is dropped, the pointer + offset is freed.
+struct MemoryReader {
     pointer: *mut u8,
     offset: isize,
 }
 
-impl MemoryReclaimer {
+impl MemoryReader {
     fn new(pointer: *mut u8) -> Self {
         Self { pointer, offset: 0 }
     }
 }
 
-impl Drop for MemoryReclaimer {
+impl Drop for MemoryReader {
     // Force Rust to free the memory that we've reclaimed, by making a Vec<u8> out of it and allowing it to drop.
     fn drop(&mut self) {
         let offset: usize = self.offset.try_into().unwrap();
@@ -67,7 +69,7 @@ impl Drop for MemoryReclaimer {
     }
 }
 
-impl Read for MemoryReclaimer {
+impl Read for MemoryReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         for i in 0..buf.len() {
             // Looking at MessagePack's source code, it looks like it only reads from buffer when it knows there's a value to read from.
@@ -85,13 +87,10 @@ impl Read for MemoryReclaimer {
 /// Converts raw bytes from the host back into an value for us to use.
 /// `ptr` is, in reality, a simple offset in WASM linear memory, which in this guest code, just looks like the heap.
 /// The host has serialized a value of type T into linear memory, and given us that offset with which we should serialize the value once again.
-/// 
 pub fn from_host<T>(ptr: *mut u8) -> T where T: Sized + serde::de::DeserializeOwned {
     // Use message pack as the serialization library
-    let reader = MemoryReclaimer::new(ptr);
-
+    let reader = MemoryReader::new(ptr);
     let out: T = rmp_serde::decode::from_read(reader).expect("from_host<T>: error reading from memory");
-
     out
 }
 
