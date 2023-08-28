@@ -2,7 +2,7 @@ extern crate proc_macro;
 extern crate proc_macro2;
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use syn::ItemFn;
+use syn::{ItemFn, LitStr};
 
 /// This macro wraps a user-written function with everything needed for Middle to call it.
 /// WebAssembly doesn't let us pass anything other than numbers, so if we want to pass something else, like a string, we have to allocate that string in linear memory and then pass back a pointer and length to the caller.
@@ -11,8 +11,10 @@ use syn::ItemFn;
 /// In addition, we need user-authored functions to be inspectable by Middle.
 /// So, we'll create a second function that outputs that description.
 /// 
-fn middle_fn_inner(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    let input = syn::parse2::<ItemFn>(input).unwrap();
+fn middle_fn_inner(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let help_str = syn::parse2::<LitStr>(attr).expect("The #[middle_fn(description)] macro must have have `description` defined, and it must be a literal string.");
+
+    let input = syn::parse2::<ItemFn>(input).expect("macro must be a function definition");
 
     // First check that the user signature matches what it's supposed to be.
     // fixme: Add more sophisticated valudations
@@ -69,8 +71,11 @@ fn middle_fn_inner(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
             let fn_info = {
                 let in_schema = schemars::schema_for!(#in_sig);
                 let out_schema = schemars::schema_for!(#out_sig);
+                let description = #help_str;
                 FnInfo {
-                    in_schema, out_schema
+                    description: description.to_string(), 
+                    in_schema, 
+                    out_schema
                 }
             };
             let ptr = to_host(&fn_info);
@@ -82,9 +87,10 @@ fn middle_fn_inner(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
 }
 
 #[proc_macro_attribute]
-pub fn middle_fn(_attr: proc_macro::TokenStream, input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn middle_fn(attr: proc_macro::TokenStream, input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = proc_macro2::TokenStream::from(input);
-    let output: proc_macro2::TokenStream = middle_fn_inner(input);
+    let attr = proc_macro2::TokenStream::from(attr);
+    let output: proc_macro2::TokenStream = middle_fn_inner(attr, input);
     proc_macro::TokenStream::from(output)
 }
 
@@ -94,6 +100,7 @@ mod test {
     #[test]
     fn test() {
         let generated = middle_fn_inner(
+            quote!("This is my test function"),
             quote!(
                 fn test(input: TestIn) -> TestOut {
                     println!("This is my function!");
@@ -131,7 +138,9 @@ mod test {
                 let fn_info = {
                     let in_schema = schemars::schema_for!(TestIn);
                     let out_schema = schemars::schema_for!(TestOut);
+                    let description = "This is my test function";
                     FnInfo {
+                        description: description.to_string(),
                         in_schema,
                         out_schema
                     }

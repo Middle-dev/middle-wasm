@@ -121,6 +121,7 @@ extern "C" {
 
 #[derive(Serialize)]
 pub struct FnInfo {
+    pub description: String,
     pub in_schema: RootSchema,
     pub out_schema: RootSchema,
 }
