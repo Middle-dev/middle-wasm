@@ -1,4 +1,4 @@
-use std::io::{Read, Cursor};
+use std::io::Read;
 
 use schemars::schema::RootSchema;
 use serde::{Serialize, Deserialize};
