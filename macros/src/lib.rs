@@ -16,19 +16,44 @@ fn middle_fn_inner(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStre
 
     let input = syn::parse2::<ItemFn>(input).expect("macro must be a function definition");
 
-    // First check that the user signature matches what it's supposed to be.
-    // fixme: Add more sophisticated valudations
-    if input.sig.inputs.len() != 1 {
-        panic!("exported functions must have a single input arg, and it must to implement JsonSchema");
-    }
-
-    let in_sig = match input.sig.inputs[0].clone() {
-        syn::FnArg::Receiver(_) => panic!("exported functions must not have `self` as a first argument"),
-        syn::FnArg::Typed(p) => {
-            p.ty
-        },
+    // We want to make it as easy and natural as we can to write and export a Middle function.
+    // So, instead of having the user write out a struct for their exported function's inputs and outputs, we'll do that for them.
+    // Here we set up variables that are important in the final macro generation.
+    let (input_args_sigs, input_args_idents) = {
+        let mut in_sig = vec![];
+        let mut called_in = vec![];
+        input.sig.inputs.iter().for_each(|input| {
+            match input {
+                syn::FnArg::Receiver(_) => panic!("exported functions must not have `self` as a first argument"),
+                syn::FnArg::Typed(p) => {
+                    let name = match *p.pat.clone() {
+                        syn::Pat::Ident(ident) => ident,
+                        _ => panic!("unexpected parameter in function type signature"),
+                    };
+                    let ty = p.ty.clone();
+                    // This will map 
+                    //  `foo(a: String, b: u32)`
+                    // to
+                    //  `a: String`, `b: u32`  
+                    in_sig.push(
+                        quote! {
+                            #name: #ty
+                        }
+                    );
+                    // This will map the above function `foo` to
+                    //  `a`, `b`
+                    called_in.push(
+                        quote! {
+                            #name
+                        }
+                    );
+                },
+            }
+        });
+        (in_sig, called_in)
     };
 
+    // Wrap the output of the user's exported function.
     let out_sig = match input.sig.output.clone() {
         syn::ReturnType::Default => panic!("exported functions must have an explicit return type"),
         syn::ReturnType::Type(_, t) => t,
@@ -45,10 +70,25 @@ fn middle_fn_inner(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStre
     // We have to reassign/clone the original fn ident for Rust to like our macro.
     let fn_name = input.sig.ident.clone();
 
+    // We'll need to wrap function inputs and outputs in a special struct.
+    let user_fn_in_struct_ident = Ident::new(&format!("UserFnIn__{}", input.sig.ident), Span::call_site());
+    let user_fn_out_struct_ident = Ident::new(&format!("UserFnOut__{}", input.sig.ident), Span::call_site());
+
     let output = quote! {
         // User's original function, which we leave unchanged.
         // This allows the user to call their own function over again if they like.
         #input
+
+        // Wrap the user's input arguments in a struct that can be taken from the runtime.
+        #[derive(Deserialize, JsonSchema)]
+        struct #user_fn_in_struct_ident {
+            // Map each input to a new member, separated by commas
+            #(#input_args_sigs),*
+        }
+
+        // Wrap the user's output argument in a struct that can be serialized for consumption by the runtime.
+        #[derive(Serialize, JsonSchema)]
+        struct #user_fn_out_struct_ident (#out_sig);
 
         #[no_mangle]
         pub fn #user_fn_name(ptr: *mut u8) -> *const u8 {
@@ -56,9 +96,14 @@ fn middle_fn_inner(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStre
             // There seems to be no other good way of constructing a value on the host side.
             let input_json: serde_json::Value = from_host(ptr);
             // Convert the JSON value back into a Rust struct.
-            let input: #in_sig = serde_json::from_value(input_json).expect("user function input could not be serialzied into JSON");
+            let input: #user_fn_in_struct_ident = serde_json::from_value(input_json).expect("user function input could not be serialzied into JSON");
             // Call the user's function.
-            let output = #fn_name(input);
+            let output = #fn_name(
+                // Map each input argument identity into (for example) `input.a, input.b, input.c`
+                #( input . #input_args_idents ),*
+            );
+            // Put the user's output in our output struct, which has the serialize derive macro implemented
+            let output = #user_fn_out_struct_ident (output);
             // Convert the return value into JSON, so the host can parse it.
             let output_json = serde_json::value::to_value(output).expect("user function output could not be serialized into JSON");
             // Make the result available to the host.
@@ -69,8 +114,8 @@ fn middle_fn_inner(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStre
         #[no_mangle]
         pub fn #introspect_fn_name() -> *const u8 {
             let fn_info = {
-                let in_schema = schemars::schema_for!(#in_sig);
-                let out_schema = schemars::schema_for!(#out_sig);
+                let in_schema = schemars::schema_for!(#user_fn_in_struct_ident);
+                let out_schema = schemars::schema_for!(#user_fn_out_struct_ident);
                 let description = #help_str;
                 FnInfo {
                     description: description.to_string(), 
@@ -102,7 +147,7 @@ mod test {
         let generated = middle_fn_inner(
             quote!("This is my test function"),
             quote!(
-                fn test(input: TestIn) -> TestOut {
+                fn test(a: String, b: u32, c: TestIn) -> Result<TestOut, Error> {
                     println!("This is my function!");
                     TestOut {
                         my_str: format!("I was given {}", input.my_str),
@@ -115,20 +160,33 @@ mod test {
         println!("{}", generated);
 
         let compare = quote!(
-            fn test(input: TestIn) -> TestOut {
+            fn test(a: String, b: u32, c: TestIn) -> Result<TestOut, Error> {
                 println!("This is my function!");
                 TestOut {
                     my_str: format!("I was given {}", input.my_str),
                     my_num: input.my_num + 1,
                 }
             }
+
+            #[derive(Deserialize, JsonSchema)]
+            struct UserFnIn__test {
+                a: String,
+                b: u32,
+                c: TestIn
+            }
+
+            #[derive(Serialize, JsonSchema)]
+            struct UserFnOut__test(Result<TestOut, Error>);
             
             #[no_mangle]
             pub fn user_fn__test(ptr: *mut u8) -> *const u8 {
                 let input_json: serde_json::Value = from_host(ptr);
-                let input: TestIn = serde_json::from_value(input_json).expect("user function input could not be serialzied into JSON");
-                let output = test(input);
-                let output_json = serde_json::value::to_value(output).expect("user function output could not be serialized into JSON");
+                let input: UserFnIn__test = serde_json::from_value(input_json)
+                    .expect("user function input could not be serialzied into JSON");
+                let output = test(input.a, input.b, input.c);
+                let output = UserFnOut__test(output);
+                let output_json = serde_json::value::to_value(output)
+                    .expect("user function output could not be serialized into JSON");
                 let ptr = to_host(&output_json);
                 ptr
             }
@@ -136,8 +194,8 @@ mod test {
             #[no_mangle]
             pub fn user_fn_info__test() -> *const u8 {
                 let fn_info = {
-                    let in_schema = schemars::schema_for!(TestIn);
-                    let out_schema = schemars::schema_for!(TestOut);
+                    let in_schema = schemars::schema_for!(UserFnIn__test);
+                    let out_schema = schemars::schema_for!(UserFnOut__test);
                     let description = "This is my test function";
                     FnInfo {
                         description: description.to_string(),
@@ -148,7 +206,6 @@ mod test {
                 let ptr = to_host(&fn_info);
                 ptr
             }
-            
         );
 
         assert_eq!(generated.to_string(), compare.to_string());

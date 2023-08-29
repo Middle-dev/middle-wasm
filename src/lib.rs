@@ -4,9 +4,12 @@ use schemars::schema::RootSchema;
 use serde::{Serialize, Deserialize};
 
 pub mod prelude {
-    pub use serde_json;
+    // All of these exports are needed for the #[middle_fn()] macro to work
     pub use macros::middle_fn;
+    pub use serde_json;
     pub use crate::{from_host, to_host, FnInfo};
+    pub use serde::{Serialize, Deserialize};
+    pub use schemars::JsonSchema;
 }
 
 /// wasm_alloc is a guest funtion that allocates some new linear memory in the Web Assembly runtime.
