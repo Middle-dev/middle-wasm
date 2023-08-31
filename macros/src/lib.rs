@@ -91,10 +91,10 @@ fn middle_fn_inner(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStre
         struct #user_fn_out_struct_ident (#out_sig);
 
         #[no_mangle]
-        pub fn #user_fn_name(ptr: *mut u8) -> *const u8 {
+        pub fn #user_fn_name(offset: u32, size: u32) -> u32 {
             // The host calls us with a JSON value.
             // There seems to be no other good way of constructing a value on the host side.
-            let input_json: serde_json::Value = from_host(ptr);
+            let input_json: serde_json::Value = value_from_host(offset, size);
             // Convert the JSON value back into a Rust struct.
             let input: #user_fn_in_struct_ident = serde_json::from_value(input_json).expect("user function input could not be serialzied into JSON");
             // Call the user's function.
@@ -107,12 +107,15 @@ fn middle_fn_inner(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStre
             // Convert the return value into JSON, so the host can parse it.
             let output_json = serde_json::value::to_value(output).expect("user function output could not be serialized into JSON");
             // Make the result available to the host.
-            let ptr = to_host(&output_json);
-            ptr
+            let (offset, size) = value_to_host(&output_json);
+            // Make the offset and size available to the host.
+            let offset = vec_parts_to_host(offset, size);
+            // All done!
+            offset
         }
 
         #[no_mangle]
-        pub fn #introspect_fn_name() -> *const u8 {
+        pub fn #introspect_fn_name() -> u32 {
             let fn_info = {
                 let in_schema = schemars::schema_for!(#user_fn_in_struct_ident);
                 let out_schema = schemars::schema_for!(#user_fn_out_struct_ident);
@@ -123,8 +126,9 @@ fn middle_fn_inner(attr: proc_macro2::TokenStream, input: proc_macro2::TokenStre
                     out_schema
                 }
             };
-            let ptr = to_host(&fn_info);
-            ptr
+            let (offset, size) = value_to_host(&fn_info);
+            let offset = vec_parts_to_host(offset, size);
+            offset
         }
     };
 
@@ -179,20 +183,21 @@ mod test {
             struct UserFnOut__test(Result<TestOut, Error>);
             
             #[no_mangle]
-            pub fn user_fn__test(ptr: *mut u8) -> *const u8 {
-                let input_json: serde_json::Value = from_host(ptr);
+            pub fn user_fn__test(offset: u32, size: u32) -> u32 {
+                let input_json: serde_json::Value = value_from_host(offset, size);
                 let input: UserFnIn__test = serde_json::from_value(input_json)
                     .expect("user function input could not be serialzied into JSON");
                 let output = test(input.a, input.b, input.c);
                 let output = UserFnOut__test(output);
                 let output_json = serde_json::value::to_value(output)
                     .expect("user function output could not be serialized into JSON");
-                let ptr = to_host(&output_json);
-                ptr
+                let (offset, size) = value_to_host(&output_json);
+                let offset = vec_parts_to_host(offset, size);
+                offset
             }
             
             #[no_mangle]
-            pub fn user_fn_info__test() -> *const u8 {
+            pub fn user_fn_info__test() -> u32 {
                 let fn_info = {
                     let in_schema = schemars::schema_for!(UserFnIn__test);
                     let out_schema = schemars::schema_for!(UserFnOut__test);
@@ -203,8 +208,9 @@ mod test {
                         out_schema
                     }
                 };
-                let ptr = to_host(&fn_info);
-                ptr
+                let (offset, size) = value_to_host(&fn_info);
+                let offset = vec_parts_to_host(offset, size);
+                offset
             }
         );
 
