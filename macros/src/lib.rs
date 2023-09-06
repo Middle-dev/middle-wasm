@@ -1,5 +1,7 @@
 extern crate proc_macro;
 extern crate proc_macro2;
+use std::panic;
+
 use proc_macro2::{Ident, Span};
 use quote::quote;
 use syn::{ItemFn, LitStr};
@@ -191,6 +193,7 @@ mod test {
                 let output = UserFnOut__test(output);
                 let output_json = serde_json::value::to_value(output)
                     .expect("user function output could not be serialized into JSON");
+                // Hmm. You know, we could try and stuff these two u32s into a i64. 
                 let (offset, size) = value_to_host(&output_json);
                 let offset = vec_parts_to_host(offset, size);
                 offset

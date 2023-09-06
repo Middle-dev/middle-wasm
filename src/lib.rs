@@ -71,6 +71,7 @@ pub fn unforget(offset: u32, size: u32) {
 }
 
 /// Converts a previously-stored vector present in our memory somewhere back into a real value for us to use.
+/// Drops the original memory.
 pub fn value_from_host<T>(offset: u32, size: u32) -> T where T: Sized + serde::de::DeserializeOwned {
     println!("GUEST: value_from_host, offset={offset}, size={size}");
     let vec = unsafe { Vec::from_raw_parts(offset as *mut u8, size as usize, size as usize) };
@@ -157,6 +158,10 @@ impl RequestBuilder {
     }
     pub fn with_json(mut self, value: Value) -> Self {
         self.json = Some(value);
+        self
+    }
+    pub fn with_bearer_auth(mut self, bearer_token: String) -> Self {
+        self.bearer_auth = Some(bearer_token);
         self
     }
     /// Sets a form parameter
