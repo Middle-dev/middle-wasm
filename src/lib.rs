@@ -1,6 +1,7 @@
 #![feature(vec_into_raw_parts)]
+#![feature(try_trait_v2)]
 
-use std::time::Duration;
+use std::{time::Duration, ops::{Try, ControlFlow, FromResidual}, convert};
 
 use schemars::schema::RootSchema;
 use serde::{Serialize, Deserialize};
@@ -8,9 +9,9 @@ use serde_json::Value;
 
 pub mod prelude {
     // All of these exports are needed for the #[middle_fn()] macro to work
-    pub use macros::middle_fn;
+    pub use macros::{middle_fn, middle_workflow};
     pub use serde_json;
-    pub use crate::{value_from_host, value_to_host, vec_parts_to_host, FnInfo};
+    pub use crate::{value_from_host, value_to_host, vec_parts_to_host, FnInfo, Resumable, mprint};
     pub use serde::{Serialize, Deserialize};
     pub use schemars::JsonSchema;
 }
@@ -99,6 +100,13 @@ pub fn request(input: &RequestBuilder) -> Result<HostRequestResponse, String> {
     out.0
 }
 
+/// Prints to Middle console.
+pub fn mprint<S: Into<String>>(input: S) {
+    let input: String = input.into();
+    let (offset, size) = value_to_host(&input);
+    unsafe { host_print(offset, size) };
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub enum HostRequestType {
     Get,
@@ -111,27 +119,34 @@ pub enum HostRequestType {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct RequestBuilder {
-    // URL to invoke
+    // URL to invoke.
     url: String,
+
     // Request method.
     method: HostRequestType,
+
     // Vector of (key, value) pairs to be included as HTTP headers.
-    // Instead of setting an Authorization header yourself, consider using basic_auth or bearer_token. 
+    // Instead of setting an Authorization header yourself, consider using basic_auth or bearer_token.
     headers: Option<Vec<(String, String)>>,
+
     // Basic auth, in the form of (username, password).
     basic_auth: Option<(String, String)>, 
     // Bearer token. 
+
     bearer_auth: Option<String>,
     // Raw request body.
     // Try to use form or json instead.
     body: Option<String>,
+
     // Set a timeout for this request.
     // The timeout is applied from when the request starts connecting until the request body is finished.
     // This needs testing.
     // It's not clear how it will interact the asynchronous wasmtime runtime.
     timeout: Option<Duration>,
+
     // Send a form body. Also sets the Content-Type header to application/x-www-form-urlencoded.
     form: Option<Vec<(String, String)>>,
+
     // Send a JSON body.
     json: Option<Value>, 
 }
@@ -222,14 +237,63 @@ pub struct RequestOut {
     body: String
 }
 
-#[link(wasm_import_module = "middle")]
-extern "C" {
-    pub fn host_request(offset: u32, size: u32) -> u32;
-}
-
 #[derive(Serialize)]
 pub struct FnInfo {
     pub description: String,
     pub in_schema: RootSchema,
     pub out_schema: RootSchema,
+}
+
+// A resumable 
+#[derive(Serialize, Deserialize)]
+pub enum Resumable<T> {
+    Pause,
+    Ready(T)
+}
+
+impl<T> FromResidual for Resumable<T> {
+    fn from_residual(residual: Resumable<convert::Infallible>) -> Self {
+        match residual {
+            Resumable::Pause => Resumable::Pause,
+            // For some reason, the standard library doesn't have to match this branch. Why not? 
+            // Maybe see... https://github.com/rust-lang/rust/issues/51085
+            Resumable::Ready(_) => panic!("not reached"),
+        }
+    }
+}
+
+impl<T> Try for Resumable<T> {
+    type Output = T;
+
+    type Residual = Resumable<convert::Infallible>;
+
+    fn from_output(output: Self::Output) -> Self {
+        Resumable::Ready(output)
+    }
+
+    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
+        match self {
+            Resumable::Pause => ControlFlow::Break(Resumable::Pause),
+            Resumable::Ready(inner) => ControlFlow::Continue(inner),
+        }
+    }
+}
+
+
+/// Pause execution of this workflow.
+pub fn pause(duration: Duration) -> Resumable<()> {
+    let milis = duration.as_millis();
+    let milis: u64 = milis.try_into().unwrap();
+    let resume = unsafe { host_pause(milis) };
+    match resume {
+        0 => Resumable::Pause,
+        _ => Resumable::Ready(()),
+    } 
+}
+
+#[link(wasm_import_module = "middle")]
+extern {
+    pub fn host_request(offset: u32, size: u32) -> u32;
+    pub fn host_print(offset: u32, size: u32);
+    pub fn host_pause(millis: u64) -> u32;
 }
