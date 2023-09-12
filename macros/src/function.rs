@@ -1,8 +1,6 @@
 use proc_macro2::{Ident, Span};
 use syn::ItemFn;
-
 use quote::quote;
-
 use crate::extract_doc;
 
 /// This macro wraps a user-written function with everything needed for Middle to call it.
