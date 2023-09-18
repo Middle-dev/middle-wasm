@@ -141,6 +141,7 @@ mod test {
         let generated = middle_fn_inner(
             quote!(
                 /// This is my test function
+                /// Second line of test function
                 fn test(a: String, b: u32, c: TestIn) -> Result<(), Error> {
                     Ok(())
                 }
@@ -151,6 +152,7 @@ mod test {
 
         let compare = quote!(
             /// This is my test function
+            /// Second line of test function
             fn test(a: String, b: u32, c: TestIn) -> Result<(), Error> {
                 Ok(())
             }
@@ -185,7 +187,7 @@ mod test {
                 let fn_info = {
                     let in_schema = schemars::schema_for!(UserFnIn__test);
                     let out_schema = schemars::schema_for!(UserFnOut__test);
-                    let description = " This is my test function";
+                    let description = "This is my test function\nSecond line of test function";
                     FnInfo {
                         description: description.to_string(),
                         in_schema,

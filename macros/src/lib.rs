@@ -10,13 +10,14 @@ mod function;
 /// This is the triple-/ comment block that actually becomes a #[doc=""] attribute.
 fn extract_doc(input: ItemFn) -> String {
     let help_str = {
-        let out = input.attrs.iter().find_map(|attr| {
+        let out = input.attrs.iter().filter_map(|attr| {
             if attr.path().is_ident("doc") {
                 match &attr.meta {
                     syn::Meta::NameValue(value) => {
                         if let syn::Expr::Lit(lit) = &value.value {
                             if let syn::Lit::Str(s) = &lit.lit {
-                                return Some(s.value())
+                                let val = s.value().trim().to_string();
+                                return Some(val)
                             }
                         }
                     },
@@ -25,10 +26,9 @@ fn extract_doc(input: ItemFn) -> String {
             }
             None
         });
-        match out {
-            Some(doc) => doc,
-            None => "".to_string(),
-        }
+        let out: Vec<_> = out.into_iter().collect();
+        let out = out.join("\n");
+        out
     };
     help_str
 }

@@ -168,6 +168,7 @@ mod test {
         let generated = middle_workflow_inner(
             quote!(
                 /// This is my test workflow
+                /// Second line of test function
                 fn test(a: String, b: u32, c: TestIn) -> Resumable<Result<(), Error> > {
                     Resumable::Ready(Ok(()))
                 }
@@ -178,6 +179,7 @@ mod test {
 
         let compare = quote!(
             /// This is my test workflow
+            /// Second line of test function
             fn test(a: String, b: u32, c: TestIn) -> Resumable<Result<(), Error> > {
                 Resumable::Ready(Ok(()))
             }
@@ -211,7 +213,7 @@ mod test {
                 let fn_info = {
                     let in_schema = schemars::schema_for!(UserWorkflowIn__test);
                     let out_schema = schemars::schema_for!(UserWorkflowOut__test);
-                    let description = " This is my test workflow";
+                    let description = "This is my test workflow\nSecond line of test function";
                     FnInfo {
                         description: description.to_string(),
                         in_schema,
