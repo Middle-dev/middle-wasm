@@ -1,5 +1,6 @@
 #![feature(vec_into_raw_parts)]
 #![feature(try_trait_v2)]
+#![feature(panic_hooks)]
 
 use std::{time::Duration, ops::{Try, ControlFlow, FromResidual}, convert};
 
@@ -14,13 +15,42 @@ pub use prompt::{prompt, prompt_with_schema};
 
 pub mod prelude {
     // All of these exports are needed for the #[middle_fn()] macro to work
-    pub use macros::{middle_fn, middle_workflow};
+    pub use macros::{middle_fn, middle_multistep_fn};
     pub use serde_json;
     pub use serde::{Serialize, Deserialize};
     pub use schemars::JsonSchema;
     pub use crate::{value_from_host, value_to_host, vec_parts_to_host, FnInfo, Resumable, mprint};
     pub use crate::{HostRequestResponse, request, RequestBuilder};
     pub use crate::{prompt, prompt_with_schema};
+
+}
+
+use std::panic;
+
+/// A guest function that should be called once per instantiation, and sets up WASM so that
+/// if a panic occurs in code, we get a printout of it.
+#[no_mangle]
+pub fn setup() {
+    std::panic::set_hook(Box::new(|info| {
+
+        let file = info.location().unwrap().file();
+        let line = info.location().unwrap().line();
+        let col = info.location().unwrap().column();
+
+        let msg = match info.payload().downcast_ref::<&'static str>() {
+            Some(s) => *s,
+            None => {
+                match info.payload().downcast_ref::<String>() {
+                    Some(s) => &s[..],
+                    None => "Box<Any>",
+                }
+            }
+        };
+
+        let err_info = format!("Panicked at '{}', {}:{}:{}", msg, file, line, col);
+        let (offset, len) = value_to_host(&err_info);
+        unsafe { host_panic(offset, len);  }
+    }));
 }
 
 /// A guest function allocating linear memory in the Web Assembly runtime for use by the host.
@@ -146,7 +176,7 @@ impl<T> Try for Resumable<T> {
     }
 }
 
-/// Pause execution of this workflow.
+/// Pause execution of this multi-step function.
 pub fn pause(duration: Duration) -> Resumable<()> {
     let milis = duration.as_millis();
     let milis: u64 = milis.try_into().unwrap();
@@ -161,4 +191,5 @@ pub fn pause(duration: Duration) -> Resumable<()> {
 extern {
     pub fn host_print(offset: u32, size: u32);
     pub fn host_pause(millis: u64) -> u32;
+    pub fn host_panic(offset: u32, size: u32);
 }

@@ -6,7 +6,7 @@ use quote::quote;
 use crate::extract_doc;
 
 
-pub fn middle_workflow_inner(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+pub fn middle_multistep_function_inner(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let input: ItemFn = syn::parse2::<ItemFn>(input).expect("macro must be a function definition");
 
     let help_str = extract_doc(input.clone());
@@ -57,7 +57,7 @@ pub fn middle_workflow_inner(input: proc_macro2::TokenStream) -> proc_macro2::To
             if let syn::Type::Path(path) = t {
                 let seg = match path.path.segments.iter().last() {
                     Some(seg) => seg,
-                    None => panic!("Return type missing path. Workflows must return Resumable<...>"),
+                    None => panic!("Return type missing path. Multi-step functions must return Resumable<...>"),
                 };
                 if seg.ident.to_owned() == "Resumable" {
                     match &seg.arguments {
@@ -68,37 +68,37 @@ pub fn middle_workflow_inner(input: proc_macro2::TokenStream) -> proc_macro2::To
                                     syn::GenericArgument::Type(t) => {
                                         (*t).clone()
                                     },
-                                    _ => panic!(". Workflows must return Resumable<...>"),
+                                    _ => panic!(". Multi-step functions must return Resumable<...>"),
                                 }
                             } else {
-                                panic!("Resumable<T> must be called with a single argument. Workflows must return Resumable<...>");
+                                panic!("Resumable<T> must be called with a single argument. Multi-step functions must return Resumable<...>");
                             }
                         },
-                        _ => panic!("Resumable<T> must be called with angle brackets. Workflows must return Resumable<...>"),
+                        _ => panic!("Resumable<T> must be called with angle brackets. Multi-step functions must return Resumable<...>"),
                     }
                 } else {
-                    panic!("Incorrect return type. Workflows must return Resumable<...>")
+                    panic!("Incorrect return type. Multi-step functions must return Resumable<...>")
                 }
             } else {
-                panic!("Return type is unexpected. Workflows must return Resumable<...>")
+                panic!("Return type is unexpected. Multi-step functions must return Resumable<...>")
             }
         },
     };
 
     // Generate the wrapped name of the function.
     // Prefix it to help identify it later.
-    let user_fn_name = Ident::new(&format!("user_workflow__{}", input.sig.ident), Span::call_site());
+    let user_fn_name = Ident::new(&format!("user_multistep_fn__{}", input.sig.ident), Span::call_site());
 
     // Create a second function which we'll use to output the signature of the user-written function.
     // Prefix this one as well to help identify later.
-    let introspect_fn_name = Ident::new(&format!("user_workflow_info__{}", input.sig.ident), Span::call_site());
+    let introspect_fn_name = Ident::new(&format!("user_multistep_fn_info__{}", input.sig.ident), Span::call_site());
 
     // We have to reassign/clone the original fn ident for Rust to like our macro.
     let fn_name = input.sig.ident.clone();
 
     // We'll need to wrap function inputs and outputs in a special struct.
-    let user_fn_in_struct_ident = Ident::new(&format!("UserWorkflowIn__{}", input.sig.ident), Span::call_site());
-    let user_fn_out_struct_ident = Ident::new(&format!("UserWorkflowOut__{}", input.sig.ident), Span::call_site());
+    let user_fn_in_struct_ident = Ident::new(&format!("UserMultistepFnIn__{}", input.sig.ident), Span::call_site());
+    let user_fn_out_struct_ident = Ident::new(&format!("UserMultistepFnOut__{}", input.sig.ident), Span::call_site());
 
     let output = quote! {
         // User's original function, which we leave unchanged.
@@ -122,14 +122,14 @@ pub fn middle_workflow_inner(input: proc_macro2::TokenStream) -> proc_macro2::To
             // There seems to be no other good way of constructing a value on the host side.
             let input_json: serde_json::Value = value_from_host(offset, size);
             // Convert the JSON value back into a Rust struct.
-            let input: #user_fn_in_struct_ident = serde_json::from_value(input_json).expect("user workflow input could not be serialzied into JSON");
+            let input: #user_fn_in_struct_ident = serde_json::from_value(input_json).expect("user multi-step function input could not be serialzied into JSON");
             // Call the user's function.
             let output = #fn_name(
                 // Map each input argument identity into (for example) `input.a, input.b, input.c`
                 #( input . #input_args_idents ),*
             );
             // Convert the return value into JSON, so the host can parse it.
-            let output_json = serde_json::value::to_value(output).expect("user workflow output could not be serialized into JSON");
+            let output_json = serde_json::value::to_value(output).expect("user multi-step function output could not be serialized into JSON");
             // Make the result available to the host.
             let (offset, size) = value_to_host(&output_json);
             // Make the offset and size available to the host.
@@ -159,15 +159,15 @@ pub fn middle_workflow_inner(input: proc_macro2::TokenStream) -> proc_macro2::To
     proc_macro2::TokenStream::from(output)
 }
 
-
+#[cfg(test)]
 mod test {
-    use crate::workflow::*;
+    use crate::multistep_function::*;
 
     #[test]
-    fn test_workflow() {
-        let generated = middle_workflow_inner(
+    fn test_multistep_fn() {
+        let generated = middle_multistep_function_inner(
             quote!(
-                /// This is my test workflow
+                /// This is my test multi-step function
                 /// Second line of test function
                 fn test(a: String, b: u32, c: TestIn) -> Resumable<Result<(), Error> > {
                     Resumable::Ready(Ok(()))
@@ -178,30 +178,30 @@ mod test {
         println!("{}", generated);
 
         let compare = quote!(
-            /// This is my test workflow
+            /// This is my test multi-step function
             /// Second line of test function
             fn test(a: String, b: u32, c: TestIn) -> Resumable<Result<(), Error> > {
                 Resumable::Ready(Ok(()))
             }
 
             #[derive(Deserialize, JsonSchema)]
-            struct UserWorkflowIn__test {
+            struct UserMultistepFnIn__test {
                 a: String,
                 b: u32,
                 c: TestIn
             }
 
             #[derive(Serialize, JsonSchema)]
-            struct UserWorkflowOut__test(Result<(), Error>);
+            struct UserMultistepFnOut__test(Result<(), Error>);
             
             #[no_mangle]
-            pub fn user_workflow__test(offset: u32, size: u32) -> u32 {
+            pub fn user_multistep_fn__test(offset: u32, size: u32) -> u32 {
                 let input_json: serde_json::Value = value_from_host(offset, size);
-                let input: UserWorkflowIn__test = serde_json::from_value(input_json)
-                    .expect("user workflow input could not be serialzied into JSON");
+                let input: UserMultistepFnIn__test = serde_json::from_value(input_json)
+                    .expect("user multi-step function input could not be serialzied into JSON");
                 let output = test(input.a, input.b, input.c);
                 let output_json = serde_json::value::to_value(output)
-                    .expect("user workflow output could not be serialized into JSON");
+                    .expect("user multi-step function output could not be serialized into JSON");
                 // Hmm. You know, we could try and stuff these two u32s into a i64. 
                 let (offset, size) = value_to_host(&output_json);
                 let offset = vec_parts_to_host(offset, size);
@@ -209,11 +209,11 @@ mod test {
             }
             
             #[no_mangle]
-            pub fn user_workflow_info__test() -> u32 {
+            pub fn user_multistep_fn_info__test() -> u32 {
                 let fn_info = {
-                    let in_schema = schemars::schema_for!(UserWorkflowIn__test);
-                    let out_schema = schemars::schema_for!(UserWorkflowOut__test);
-                    let description = "This is my test workflow\nSecond line of test function";
+                    let in_schema = schemars::schema_for!(UserMultistepFnIn__test);
+                    let out_schema = schemars::schema_for!(UserMultistepFnOut__test);
+                    let description = "This is my test multi-step function\nSecond line of test function";
                     FnInfo {
                         description: description.to_string(),
                         in_schema,

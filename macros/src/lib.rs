@@ -3,7 +3,7 @@ use syn::ItemFn;
 extern crate proc_macro;
 extern crate proc_macro2;
 
-mod workflow;
+mod multistep_function;
 mod function;
 
 /// Copies the "doc" attribute of a function.
@@ -40,7 +40,7 @@ pub fn middle_fn(_attr: proc_macro::TokenStream, input: proc_macro::TokenStream)
 }
 
 #[proc_macro_attribute]
-pub fn middle_workflow(_attr: proc_macro::TokenStream, input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let output = workflow::middle_workflow_inner(input.into());
+pub fn middle_multistep_fn(_attr: proc_macro::TokenStream, input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let output = multistep_function::middle_multistep_function_inner(input.into());
     proc_macro::TokenStream::from(output)
 }
